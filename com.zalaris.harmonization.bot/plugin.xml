@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin>
+   <extension
+         point="org.eclipse.ui.views">
+      <view
+            id="com.zalaris.harmonization.bot.views.chatView"
+            name="Harmonization Bot"
+            class="com.zalaris.harmonization.bot.views.chatView"
+            category="com.zalaris.harmonization.bot">
+      </view>
+   </extension>
+
+<extension
+      point="org.eclipse.ui.commands">
+   <command
+         id="com.zalaris.harmonization.bot.commands.validate"
+         name="Validate with Harmonization Bot"
+         description="Validate current ABAP object against harmonization rules">
+   </command>
+</extension>
+
+<extension
+      point="org.eclipse.ui.handlers">
+   <handler
+         commandId="com.zalaris.harmonization.bot.commands.validate"
+         class="com.zalaris.harmonization.bot.handlers.ValidateHandler">
+   </handler>
+</extension>
+
+<extension
+      point="org.eclipse.ui.menus">
+   <!-- show in any editor’s context menu; ADT editors included -->
+   <menuContribution
+         locationURI="popup:org.eclipse.ui.popup.any?after=additions">
+      <command
+            commandId="com.zalaris.harmonization.bot.commands.validate"
+            label="Validate with Harmonization Bot"
+            style="push">
+      </command>
+   </menuContribution>
+</extension>
+
+<!-- marker type for violations -->
+<extension
+      point="org.eclipse.core.resources.markers">
+   <marker
+         id="com.zalaris.harmonization.bot.marker"
+         name="Harmonization Violation"
+         super="org.eclipse.core.resources.problemmarker"
+         persistent="true">
+   </marker>
+</extension>
+
+<extension point="org.eclipse.ui.commands">
+   <command
+         id="com.zalaris.harmonization.bot.commands.insertTemplate"
+         name="Insert Harmonized Template"
+         description="Insert a harmonized ABAP template from project rules">
+   </command>
+</extension>
+
+<extension point="org.eclipse.ui.handlers">
+   <handler
+         commandId="com.zalaris.harmonization.bot.commands.insertTemplate"
+         class="com.zalaris.harmonization.bot.handlers.InsertTemplateHandler">
+   </handler>
+</extension>
+
+<extension point="org.eclipse.ui.menus">
+   <menuContribution
+         locationURI="popup:org.eclipse.ui.popup.any?after=additions">
+      <command
+            commandId="com.zalaris.harmonization.bot.commands.insertTemplate"
+            label="Insert Harmonized Template..."
+            style="push">
+      </command>
+   </menuContribution>
+</extension>
+
+</plugin>
