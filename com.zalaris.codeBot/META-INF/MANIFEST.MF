@@ -1,0 +1,16 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: CodeBot
+Bundle-SymbolicName: com.zalaris.codeBot;singleton:=true
+Bundle-Version: 1.0.0.qualifier
+Bundle-Vendor: ZALARIS
+Require-Bundle: org.eclipse.core.runtime,
+ org.eclipse.ui,
+ org.eclipse.ui.editors;bundle-version="3.20.100",
+ org.eclipse.ui.workbench.texteditor;bundle-version="3.19.300",
+ org.eclipse.jface.text;bundle-version="3.28.100",
+ com.sap.adt.tools.core;bundle-version="3.54.1",
+ com.sap.adt.tools.abapsource;bundle-version="3.54.1"
+Bundle-RequiredExecutionEnvironment: JavaSE-23
+Import-Package: jakarta.inject;version="[2.0.0,3.0.0)"
+Automatic-Module-Name: com.zalaris.codeBot
