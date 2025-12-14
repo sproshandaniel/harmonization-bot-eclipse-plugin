@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+
+   <!-- Views: category + CodeBot view -->
+   <extension
+         point="org.eclipse.ui.views">
+      <category
+            name="CodeBot"
+            id="com.zalaris.codeBot">
+      </category>
+
+      <view
+            id="com.zalaris.codebot.views.BotView"
+            name="ZalCode"
+            icon="icons/sample.png"
+            class="com.zalaris.codebot.views.BotView"
+            category="com.zalaris.codeBot"
+            inject="true">
+      </view>
+   </extension>
+
+   <!-- Put CodeBot in the ABAP perspective -->
+   <extension
+         point="org.eclipse.ui.perspectiveExtensions">
+      <perspectiveExtension
+            targetID="org.eclipse.adt.ui.ABAPPerspective">
+         <view
+               id="com.zalaris.codebot.views.BotView"
+               relative="org.eclipse.ui.views.ProblemView"
+               relationship="right"
+               ratio="0.5">
+         </view>
+      </perspectiveExtension>
+   </extension>
+
+   <!-- Help contexts (unchanged) -->
+   <extension
+         point="org.eclipse.help.contexts">
+      <contexts
+            file="contexts.xml">
+      </contexts>
+   </extension>
+
+   <!-- Command for “Activate with CodeBot Validation” -->
+   <extension
+         point="org.eclipse.ui.commands">
+      <command
+            id="com.zalaris.codebot.commands.activateWithValidation"
+            name="Activate with CodeBot Validation"
+            categoryId="com.zalaris.codeBot">
+      </command>
+   </extension>
+
+   <!-- Handler implementing the activation + validation logic -->
+   <extension
+         point="org.eclipse.ui.handlers">
+      <handler
+            commandId="com.zalaris.codebot.commands.activateWithValidation"
+            class="com.zalaris.codebot.handlers.ActivateWithValidationHandler">
+      </handler>
+   </extension>
+
+   <!-- Add the command to the ABAP editor popup menu (location can be adjusted) -->
+   <extension
+         point="org.eclipse.ui.menus">
+      <menuContribution
+            locationURI="popup:org.eclipse.ui.edit.text.editor?after=additions">
+         <command
+               commandId="com.zalaris.codebot.commands.activateWithValidation"
+               label="Activate with CodeBot Validation"
+               style="push">
+         </command>
+      </menuContribution>
+   </extension>
+
+</plugin>
