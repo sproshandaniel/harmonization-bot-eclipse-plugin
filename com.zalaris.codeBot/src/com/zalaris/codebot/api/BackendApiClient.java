@@ -110,6 +110,17 @@ public class BackendApiClient {
             String transport,
             boolean logViolations)
             throws IOException, InterruptedException {
+        return assist(query, code, objectName, transport, logViolations, false);
+    }
+
+    public Map<String, Object> assist(
+            String query,
+            String code,
+            String objectName,
+            String transport,
+            boolean logViolations,
+            boolean llmFallbackConfirmed)
+            throws IOException, InterruptedException {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("query", query == null ? "" : query);
         payload.put("code", code == null ? "" : code);
@@ -120,6 +131,7 @@ public class BackendApiClient {
         payload.put("transport", transport == null ? "ADT" : transport);
         payload.put("top_k", 6);
         payload.put("log_violations", logViolations);
+        payload.put("llm_fallback_confirmed", llmFallbackConfirmed);
 
         return postJson("/api/bot/assist", payload);
     }

@@ -5,6 +5,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Shell;
+
 import com.zalaris.codebot.adt.AbapEditorUtil;
 import com.zalaris.codebot.api.BackendApiClient;
 import com.zalaris.codebot.bot.BotResponse.Kind;
@@ -33,6 +37,22 @@ public class SimpleRuleBot {
                     objectName,
                     "ADT",
                     shouldLogViolations);
+            if (requiresLlmFallbackConfirmation(response)) {
+                boolean proceed = askForLlmFallbackConsent();
+                if (proceed) {
+                    response = apiClient.assist(
+                            query,
+                            activeCode,
+                            objectName,
+                            "ADT",
+                            shouldLogViolations,
+                            true);
+                } else {
+                    return new BotResponse(
+                            Kind.INFO,
+                            "LLM fallback was not used. I can continue with rule-based guidance only.");
+                }
+            }
             return toBotResponse(response);
         } catch (Exception ex) {
             return new BotResponse(
@@ -62,6 +82,11 @@ public class SimpleRuleBot {
 
     private BotResponse toBotResponse(Map<String, Object> response) {
         String message = asString(response.get("message"), "No response from backend.");
+        Map<String, Object> llmFallback = asMap(response.get("llm_fallback"));
+        String llmAnswer = asString(llmFallback.get("answer"), "");
+        if (!llmAnswer.isEmpty()) {
+            message = message + "\n\n--- LLM Guidance ---\n" + llmAnswer;
+        }
         List<RuleViolation> violations = parseViolations(response.get("violations"));
         Map<String, Object> suggestions = asMap(response.get("suggestions"));
 
@@ -81,6 +106,26 @@ public class SimpleRuleBot {
             return new BotResponse(Kind.TEMPLATE_SUGGESTION, message, templateCode, Collections.emptyList());
         }
         return new BotResponse(Kind.INFO, message, null, Collections.emptyList());
+    }
+
+    private boolean requiresLlmFallbackConfirmation(Map<String, Object> response) {
+        Map<String, Object> llmFallback = asMap(response.get("llm_fallback"));
+        if (llmFallback.isEmpty()) {
+            return false;
+        }
+        return asBoolean(llmFallback.get("enabled")) && asBoolean(llmFallback.get("requires_confirmation"));
+    }
+
+    private boolean askForLlmFallbackConsent() {
+        Display display = Display.getDefault();
+        if (display == null) {
+            return false;
+        }
+        Shell shell = display.getActiveShell();
+        return MessageDialog.openQuestion(
+                shell,
+                "CodeBot LLM Fallback",
+                "No satisfactory rule-based result was found.\n\nUse LLM fallback guidance?");
     }
 
     private String firstSnippet(Map<String, Object> suggestions, String key) {
@@ -154,5 +199,19 @@ public class SimpleRuleBot {
         } catch (Exception ex) {
             return fallback;
         }
+    }
+
+    private boolean asBoolean(Object value) {
+        if (value instanceof Boolean) {
+            return (Boolean) value;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).intValue() != 0;
+        }
+        if (value == null) {
+            return false;
+        }
+        String text = String.valueOf(value).trim().toLowerCase();
+        return "true".equals(text) || "1".equals(text) || "yes".equals(text) || "on".equals(text);
     }
 }
