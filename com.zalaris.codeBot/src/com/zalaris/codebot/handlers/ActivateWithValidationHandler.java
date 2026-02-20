@@ -1,5 +1,8 @@
 package com.zalaris.codebot.handlers;
 
+import java.util.List;
+import java.util.Locale;
+
 import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
@@ -7,53 +10,55 @@ import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.handlers.HandlerUtil;
 
-import com.zalaris.codebot.validation.ActivationValidator;
-import com.zalaris.codebot.validation.ActivationValidator.ValidationResult;
+import com.zalaris.codebot.adt.AbapEditorUtil;
+import com.zalaris.codebot.bot.BotResponse;
+import com.zalaris.codebot.bot.BotResponse.RuleViolation;
+import com.zalaris.codebot.bot.SimpleRuleBot;
+import com.zalaris.codebot.governance.ViolationGovernanceService;
 
 /**
  * Command handler that performs validation before allowing activation.
- * If validation fails, activation is blocked.
+ * If MAJOR validation fails, activation is blocked.
  */
 public class ActivateWithValidationHandler extends AbstractHandler {
 
-    private final ActivationValidator validator = new ActivationValidator();
+    private final SimpleRuleBot bot = new SimpleRuleBot();
 
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException {
         Shell shell = HandlerUtil.getActiveShell(event);
 
-        // TODO: replace these dummy values with real ABAP object metadata from ADT/editor
-        String objectName = "Z_DEMO_OBJECT";
-        String objectType = "CLASS"; // e.g., CLASS, PROGRAM, etc.
-        String sourceCode = getCurrentSourceCode(); // to be wired later
+        BotResponse response = bot.validateCurrentEditor();
+        List<RuleViolation> violations = response.getViolations();
+        ViolationGovernanceService.updateFromValidation(
+                AbapEditorUtil.getActiveEditorNameOrDefault(),
+                violations);
 
-        ValidationResult result = validator.validate(objectName, objectType, sourceCode);
-
-        if (!result.valid()) {
-            // 💥 This is where activation is stopped
-            MessageDialog.openError(shell, "Activation blocked", result.message());
-            return null; // DO NOT call real activation
+        if (hasMajor(violations)) {
+            MessageDialog.openError(shell, "Activation blocked", response.getMessage());
+            return null;
         }
 
-        // If validation passes, trigger real activation
-        performRealActivation(objectName, objectType, sourceCode);
+        performRealActivation();
 
         MessageDialog.openInformation(shell, "Activation", "Activation completed successfully.");
         return null;
     }
 
-    /**
-     * TODO: Integrate with ABAP Development Tools (ADT) APIs to get source from the active editor.
-     */
-    private String getCurrentSourceCode() {
-        // For now, just a placeholder; later we'll read actual editor content.
-        return "";
+    private boolean hasMajor(List<RuleViolation> violations) {
+        if (violations == null || violations.isEmpty()) {
+            return false;
+        }
+        for (RuleViolation v : violations) {
+            String severity = (v.getSeverity() == null ? "" : v.getSeverity()).toUpperCase(Locale.ROOT);
+            if ("MAJOR".equals(severity)) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    /**
-     * TODO: Integrate with ADT / backend call that performs the activation.
-     */
-    private void performRealActivation(String objectName, String objectType, String sourceCode) {
+    private void performRealActivation() {
         // Placeholder where you'll call the ABAP activation service.
     }
 }

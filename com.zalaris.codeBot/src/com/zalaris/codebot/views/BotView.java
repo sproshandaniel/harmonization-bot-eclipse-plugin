@@ -1,7 +1,11 @@
 package com.zalaris.codebot.views;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
+import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -9,19 +13,19 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
+import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.part.ViewPart;
 
-import jakarta.inject.Inject;
-import org.eclipse.ui.IWorkbench;
-import org.eclipse.jface.dialogs.MessageDialog;
-
-import com.zalaris.codebot.bot.BotResponse;
-import com.zalaris.codebot.bot.SimpleRuleBot;
-import com.zalaris.codebot.bot.BotResponse.RuleViolation;
 import com.zalaris.codebot.adt.AbapEditorUtil;
+import com.zalaris.codebot.bot.BotResponse;
+import com.zalaris.codebot.bot.BotResponse.RuleViolation;
+import com.zalaris.codebot.bot.SimpleRuleBot;
+import com.zalaris.codebot.governance.ViolationGovernanceService;
+
+import jakarta.inject.Inject;
 
 /**
- * CodeBot view – validate ABAP code and provide templates.
+ * CodeBot view: single-window chat and response experience.
  */
 public class BotView extends ViewPart {
 
@@ -31,199 +35,334 @@ public class BotView extends ViewPart {
     IWorkbench workbench;
 
     private Text questionText;
-    private Text answerText;
-    private Button askButton;
+    private Text conversationText;
+    private Text violationDetailText;
+    private org.eclipse.swt.widgets.List violationsList;
+    private Label statusLabel;
+    private Button chatButton;
+    private Button validateButton;
+    private Button clearButton;
     private Button pasteButton;
 
-    // SWT violations list – fully qualified to avoid collision with java.util.List
-    private org.eclipse.swt.widgets.List violationsList;
-
     private final SimpleRuleBot bot = new SimpleRuleBot();
-    private BotResponse lastResponse; // remember last response, including violations or template
+    private BotResponse lastResponse;
+    private List<RuleViolation> currentViolations = java.util.Collections.emptyList();
 
     @Override
     public void createPartControl(Composite parent) {
         parent.setLayout(new GridLayout(1, false));
 
         Label title = new Label(parent, SWT.NONE);
-        title.setText("CodeBot – ABAP Assistant");
+        title.setText("CodeBot");
 
-        Label qLabel = new Label(parent, SWT.NONE);
-        qLabel.setText("Ask ZalBot (e.g., 'validate current object', 'template for select single'):");
+        Label promptLabel = new Label(parent, SWT.NONE);
+        promptLabel.setText("Request");
 
         questionText = new Text(parent, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
-        GridData qData = new GridData(SWT.FILL, SWT.FILL, true, false);
-        qData.heightHint = 60;
+        GridData qData = new GridData(SWT.FILL, SWT.TOP, true, false);
+        qData.heightHint = 72;
         questionText.setLayoutData(qData);
 
-        askButton = new Button(parent, SWT.PUSH);
-        askButton.setText("Ask");
-        askButton.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        Composite actions = new Composite(parent, SWT.NONE);
+        actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        GridLayout actionLayout = new GridLayout(5, false);
+        actionLayout.marginWidth = 0;
+        actionLayout.marginHeight = 0;
+        actions.setLayout(actionLayout);
 
-        // Violations list label
-        Label vLabel = new Label(parent, SWT.NONE);
-        vLabel.setText("Rule violations (if any):");
+        chatButton = new Button(actions, SWT.PUSH);
+        chatButton.setText("Chat");
 
-        // List of violations
-        violationsList =
-            new org.eclipse.swt.widgets.List(parent, SWT.BORDER | SWT.SINGLE | SWT.V_SCROLL);
-        GridData vData = new GridData(SWT.FILL, SWT.FILL, true, false);
+        validateButton = new Button(actions, SWT.PUSH);
+        validateButton.setText("Validate");
+
+        clearButton = new Button(actions, SWT.PUSH);
+        clearButton.setText("Clear");
+
+        pasteButton = new Button(actions, SWT.PUSH);
+        pasteButton.setText("Paste Suggestion");
+        pasteButton.setEnabled(false);
+
+        statusLabel = new Label(actions, SWT.NONE);
+        statusLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        statusLabel.setText("Ready");
+
+        Label responseLabel = new Label(parent, SWT.NONE);
+        responseLabel.setText("Conversation");
+
+        conversationText = new Text(
+                parent,
+                SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.READ_ONLY);
+        conversationText.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+
+        Label violationsLabel = new Label(parent, SWT.NONE);
+        violationsLabel.setText("Violations (click to jump to line)");
+
+        violationsList = new org.eclipse.swt.widgets.List(parent, SWT.BORDER | SWT.V_SCROLL);
+        GridData vData = new GridData(SWT.FILL, SWT.TOP, true, false);
         vData.heightHint = 100;
         violationsList.setLayoutData(vData);
 
-        Label aLabel = new Label(parent, SWT.NONE);
-        aLabel.setText("Details / Answer:");
+        Label violationDetailLabel = new Label(parent, SWT.NONE);
+        violationDetailLabel.setText("Selected Violation Detail");
 
-        answerText = new Text(parent,
+        violationDetailText = new Text(
+                parent,
                 SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.READ_ONLY);
-        GridData aData = new GridData(SWT.FILL, SWT.FILL, true, true);
-        aData.heightHint = 200;
-        answerText.setLayoutData(aData);
-
-        pasteButton = new Button(parent, SWT.PUSH);
-        pasteButton.setText("Paste template into editor");
-        pasteButton.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        pasteButton.setEnabled(false); // only enabled when a template is available
+        GridData vdData = new GridData(SWT.FILL, SWT.TOP, true, false);
+        vdData.heightHint = 90;
+        violationDetailText.setLayoutData(vdData);
 
         hookListeners();
     }
 
     private void hookListeners() {
-        askButton.addListener(SWT.Selection, e -> handleAsk());
+        chatButton.addListener(SWT.Selection, e -> handleChat(false));
+        validateButton.addListener(SWT.Selection, e -> handleChat(true));
+        clearButton.addListener(SWT.Selection, e -> clearConversation());
         pasteButton.addListener(SWT.Selection, e -> handlePaste());
-
-        // When a violation is selected, show its details in the answer area
-        violationsList.addListener(SWT.Selection, e -> handleViolationSelection());
+        violationsList.addListener(SWT.Selection, e -> handleViolationClick());
+        violationsList.addListener(SWT.DefaultSelection, e -> handleViolationClick());
     }
 
-    private void handleAsk() {
-        String question = questionText.getText();
-        lastResponse = bot.reply(question);
+    private void handleChat(boolean forceValidate) {
+        String question = questionText.getText().trim();
+        if (forceValidate) {
+            question = "validate current object";
+            questionText.setText(question);
+        }
+        if (question.isEmpty()) {
+            MessageDialog.openInformation(getSite().getShell(), "CodeBot", "Enter a prompt first.");
+            return;
+        }
 
-        // Clear old violations on each request
+        appendConversation("You", question);
+        statusLabel.setText("Processing...");
+        lastResponse = bot.reply(question);
+        pasteButton.setEnabled(lastResponse != null && hasPasteableSuggestion(lastResponse));
+        currentViolations = java.util.Collections.emptyList();
         violationsList.removeAll();
+        violationDetailText.setText("");
 
         if (lastResponse == null) {
-            answerText.setText("No response from bot.");
-            pasteButton.setEnabled(false);
+            appendConversation("CodeBot", "No response from bot.");
+            statusLabel.setText("No response");
             return;
         }
 
-        // Branch based on response kind
-        if (lastResponse.getKind() == BotResponse.Kind.TEMPLATE_SUGGESTION
-                && lastResponse.hasTemplate()) {
-
-            // Template response: show message + code, enable paste
+        if (lastResponse.getKind() == BotResponse.Kind.TEMPLATE_SUGGESTION && lastResponse.hasTemplate()) {
             String msg = lastResponse.getMessage()
-                       + "\n\n--- Suggested Template ---\n"
-                       + lastResponse.getTemplateCode();
-            answerText.setText(msg);
-            pasteButton.setEnabled(true);
+                    + "\n\n--- Suggested Template ---\n"
+                    + lastResponse.getTemplateCode();
+            appendConversation("CodeBot", msg);
+            statusLabel.setText("Template suggestion ready");
+            return;
+        }
 
-        } else if (lastResponse.getKind() == BotResponse.Kind.VALIDATION_RESULT) {
-            // Validation result: show summary and violations
-            StringBuilder sb = new StringBuilder();
-
+        if (lastResponse.getKind() == BotResponse.Kind.VALIDATION_RESULT) {
             if (lastResponse.hasViolations()) {
-                List<RuleViolation> vs = lastResponse.getViolations();
+                List<RuleViolation> violations = sortViolationsBySeverity(lastResponse.getViolations());
+                currentViolations = violations;
+                StringBuilder sb = new StringBuilder();
                 sb.append(lastResponse.getMessage())
-                  .append("\n\n")
-                  .append("Total violations: ").append(vs.size())
-                  .append("\n")
-                  .append("Select a violation in the list above to see details.\n");
+                        .append("\n\nTotal violations: ").append(violations.size())
+                        .append("\n")
+                        .append("Use the violations panel to review and jump to each line.\n");
 
-                // Populate SWT list
-                for (RuleViolation v : vs) {
-                    String line = String.format(
-                        "Line %d: [%s] %s",
-                        v.getLine(),
-                        v.getRuleId(),
-                        v.getTitle()
-                    );
-                    violationsList.add(line);
+                int previewCount = Math.min(3, violations.size());
+                sb.append("\nTop findings:\n");
+                for (int i = 0; i < previewCount; i++) {
+                    RuleViolation v = violations.get(i);
+                    String sev = normalizeSeverity(v.getSeverity());
+                    sb.append("- ").append(sev).append(" | Line ").append(v.getLine())
+                            .append(" [").append(v.getRuleId()).append("] ")
+                            .append(v.getTitle()).append("\n");
+                    violationsList.add(formatViolationListEntry(v));
                 }
-
-                // Auto-select first violation and show its details
-                if (!vs.isEmpty()) {
-                    violationsList.select(0);
-                    showViolationDetails(vs.get(0));
+                for (int i = previewCount; i < violations.size(); i++) {
+                    RuleViolation v = violations.get(i);
+                    violationsList.add(formatViolationListEntry(v));
                 }
-
+                if (violations.size() > previewCount) {
+                    sb.append("...and ").append(violations.size() - previewCount).append(" more.");
+                }
+                appendConversation("CodeBot", sb.toString());
+                statusLabel.setText("Validation completed with violations");
+                ViolationGovernanceService.updateFromValidation(
+                        AbapEditorUtil.getActiveEditorNameOrDefault(),
+                        violations);
+                showViolationDetails(violations.get(0));
+                violationsList.select(0);
             } else {
-                sb.append(lastResponse.getMessage())
-                  .append("\n\nNo harmonization rule violations detected.");
+                appendConversation("CodeBot", lastResponse.getMessage() + "\n\nNo violations detected.");
+                statusLabel.setText("Validation passed");
+                violationDetailText.setText("");
+                ViolationGovernanceService.clear();
             }
-
-            // If we didn't already show details (e.g. no violations), show summary
-            if (!lastResponse.hasViolations()) {
-                answerText.setText(sb.toString());
-            }
-
-            // For validation responses we do not paste templates
-            pasteButton.setEnabled(false);
-
-        } else {
-            // Generic info response
-            answerText.setText(lastResponse.getMessage());
-            pasteButton.setEnabled(false);
-        }
-    }
-
-    private void handleViolationSelection() {
-        if (lastResponse == null || !lastResponse.hasViolations()) {
             return;
         }
+
+        appendConversation("CodeBot", lastResponse.getMessage());
+        statusLabel.setText("Response ready");
+    }
+
+    private void appendConversation(String role, String content) {
+        String current = conversationText.getText();
+        String prefix = current.isEmpty() ? "" : "\n\n";
+        conversationText.setText(current + prefix + role + ":\n" + content);
+    }
+
+    private void clearConversation() {
+        questionText.setText("");
+        conversationText.setText("");
+        violationsList.removeAll();
+        violationDetailText.setText("");
+        currentViolations = java.util.Collections.emptyList();
+        statusLabel.setText("Cleared");
+        pasteButton.setEnabled(false);
+        lastResponse = null;
+    }
+
+    private void handleViolationClick() {
         int index = violationsList.getSelectionIndex();
-        if (index < 0) {
+        if (index < 0 || index >= currentViolations.size()) {
             return;
         }
-
-        List<RuleViolation> vs = lastResponse.getViolations();
-        if (index >= vs.size()) {
+        RuleViolation violation = currentViolations.get(index);
+        boolean ok = AbapEditorUtil.goToLine(violation.getLine());
+        showViolationPopup(violation);
+        if (!ok) {
+            MessageDialog.openError(
+                    getSite().getShell(),
+                    "CodeBot",
+                    "Could not navigate to line " + violation.getLine()
+                            + ". Ensure an ABAP editor is active.");
             return;
         }
-
-        RuleViolation v = vs.get(index);
-        showViolationDetails(v);
+        statusLabel.setText("Jumped to line " + violation.getLine());
     }
 
-    private void showViolationDetails(RuleViolation v) {
-        StringBuilder sb = new StringBuilder();
+    private String formatViolationListEntry(RuleViolation violation) {
+        String sev = normalizeSeverity(violation.getSeverity());
+        return "[" + sev + "] Line " + violation.getLine() + " [" + violation.getRuleId() + "] " + violation.getTitle();
+    }
 
-        sb.append("Rule ID : ").append(v.getRuleId()).append("\n")
-          .append("Title   : ").append(v.getTitle()).append("\n")
-          .append("Pack    : ").append(v.getRulePackName()).append("\n")
-          .append("Project : ").append(v.getProjectName()).append("\n")
-          .append("Line    : ").append(v.getLine()).append("\n\n")
-          .append("Description:\n")
-          .append(v.getDescription()).append("\n\n");
-
-        if (v.getCorrectCode() != null && !v.getCorrectCode().isEmpty()) {
-            sb.append("--- Suggested correction ---\n")
-              .append(v.getCorrectCode()).append("\n");
+    private String normalizeSeverity(String severity) {
+        if (severity == null || severity.isBlank()) {
+            return "MAJOR";
         }
+        return severity.trim().toUpperCase(Locale.ROOT);
+    }
 
-        answerText.setText(sb.toString());
+    private int severityRank(RuleViolation violation) {
+        String sev = normalizeSeverity(violation.getSeverity());
+        switch (sev) {
+            case "CRITICAL":
+                return 0;
+            case "MAJOR":
+                return 1;
+            case "MINOR":
+                return 2;
+            case "INFO":
+                return 3;
+            default:
+                return 4;
+        }
+    }
+
+    private List<RuleViolation> sortViolationsBySeverity(List<RuleViolation> violations) {
+        List<RuleViolation> sorted = new ArrayList<>(violations);
+        sorted.sort(
+                Comparator.comparingInt(this::severityRank)
+                        .thenComparingInt(v -> Math.max(1, v.getLine())));
+        return sorted;
+    }
+
+    private void showViolationPopup(RuleViolation violation) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Rule: ").append(violation.getTitle())
+                .append("\n")
+                .append("Severity: ").append(violation.getSeverity())
+                .append("\n")
+                .append("Line: ").append(violation.getLine())
+                .append("\n")
+                .append("Rule ID: ").append(violation.getRuleId())
+                .append("\n")
+                .append("Pack: ").append(violation.getRulePackName())
+                .append("\n\n")
+                .append("Description:\n")
+                .append(violation.getDescription());
+        if (violation.getCorrectCode() != null && !violation.getCorrectCode().trim().isEmpty()) {
+            sb.append("\n\nSuggested correction:\n").append(violation.getCorrectCode());
+        }
+        MessageDialog.openInformation(getSite().getShell(), "Violation Detail", sb.toString());
+    }
+
+    private void showViolationDetails(RuleViolation violation) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Rule: ").append(violation.getTitle())
+                .append("\n")
+                .append("Severity: ").append(violation.getSeverity())
+                .append("\n")
+                .append("Line: ").append(violation.getLine())
+                .append("\n")
+                .append("Rule ID: ").append(violation.getRuleId())
+                .append("\n")
+                .append("Pack: ").append(violation.getRulePackName())
+                .append("\n\n")
+                .append("Description:\n")
+                .append(violation.getDescription());
+        if (violation.getCorrectCode() != null && !violation.getCorrectCode().trim().isEmpty()) {
+            sb.append("\n\nSuggested correction:\n").append(violation.getCorrectCode());
+        }
+        violationDetailText.setText(sb.toString());
     }
 
     private void handlePaste() {
-        if (lastResponse == null || !lastResponse.hasTemplate()) {
-            MessageDialog.openInformation(getSite().getShell(),
+        String pasteContent = getPasteableSuggestion(lastResponse);
+        if (pasteContent.isEmpty()) {
+            MessageDialog.openInformation(
+                    getSite().getShell(),
                     "CodeBot",
-                    "There is no template to paste. Ask for a template first.");
+                    "There is no suggestion to paste for this response.");
             return;
         }
 
-        boolean ok = AbapEditorUtil.insertTextAtCursor(lastResponse.getTemplateCode());
+        boolean ok = AbapEditorUtil.insertTextAtCursor(pasteContent);
         if (!ok) {
-            MessageDialog.openError(getSite().getShell(),
+            MessageDialog.openError(
+                    getSite().getShell(),
                     "CodeBot",
-                    "Could not insert template. Please ensure an ABAP editor is active.");
-        } else {
-            MessageDialog.openInformation(getSite().getShell(),
-                    "CodeBot",
-                    "Template inserted into the active editor.");
+                    "Could not insert template. Ensure an ABAP editor is active.");
+            return;
         }
+
+        statusLabel.setText("Suggestion pasted into editor");
+    }
+
+    private boolean hasPasteableSuggestion(BotResponse response) {
+        return !getPasteableSuggestion(response).isEmpty();
+    }
+
+    private String getPasteableSuggestion(BotResponse response) {
+        if (response == null) {
+            return "";
+        }
+        if (response.hasViolations()) {
+            for (RuleViolation violation : response.getViolations()) {
+                String correction = violation.getCorrectCode();
+                if (correction != null && !correction.trim().isEmpty()) {
+                    return correction;
+                }
+            }
+        }
+        if (response.hasTemplate()) {
+            String code = response.getTemplateCode();
+            if (code != null && !code.trim().isEmpty()) {
+                return code;
+            }
+        }
+        return "";
     }
 
     @Override

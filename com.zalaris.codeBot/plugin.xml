@@ -74,4 +74,12 @@
       </menuContribution>
    </extension>
 
+
+   <extension
+         point="org.eclipse.ui.startup">
+      <startup
+            class="com.zalaris.codebot.startup.CodeBotStartup">
+      </startup>
+   </extension>
 </plugin>
+

@@ -1,15 +1,18 @@
 package com.zalaris.codebot.adt;
 
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.IAdaptable;
+import org.eclipse.jface.text.BadLocationException;
+import org.eclipse.jface.text.IDocument;
+import org.eclipse.jface.text.ITextSelection;
+import org.eclipse.jface.viewers.ISelection;
+import org.eclipse.jface.viewers.ISelectionProvider;
+import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.texteditor.ITextEditor;
-import org.eclipse.jface.text.IDocument;
-import org.eclipse.jface.text.ITextSelection;
-import org.eclipse.jface.viewers.ISelection;
-import org.eclipse.jface.viewers.ISelectionProvider;
-import org.eclipse.core.runtime.IAdaptable;
 
 public class AbapEditorUtil {
 
@@ -37,12 +40,10 @@ public class AbapEditorUtil {
 
         System.out.println("[CodeBot Debug] Active editor class: " + editorPart.getClass().getName());
 
-        // 1) Direct ITextEditor
         if (editorPart instanceof ITextEditor) {
             return (ITextEditor) editorPart;
         }
 
-        // 2) Try Eclipse adapter mechanism (ADT typically supports this)
         if (editorPart instanceof IAdaptable) {
             ITextEditor adapted = ((IAdaptable) editorPart).getAdapter(ITextEditor.class);
             if (adapted != null) {
@@ -53,6 +54,30 @@ public class AbapEditorUtil {
 
         System.out.println("[CodeBot Debug] getActiveTextEditor: could not adapt to ITextEditor.");
         return null;
+    }
+
+    public static String getActiveEditorNameOrDefault() {
+        try {
+            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
+            if (window == null) {
+                return "ADT_OBJECT";
+            }
+            IWorkbenchPage page = window.getActivePage();
+            if (page == null) {
+                return "ADT_OBJECT";
+            }
+            IEditorPart editorPart = page.getActiveEditor();
+            if (editorPart == null) {
+                return "ADT_OBJECT";
+            }
+            String title = editorPart.getTitle();
+            if (title == null || title.trim().isEmpty()) {
+                return "ADT_OBJECT";
+            }
+            return title.trim();
+        } catch (Exception ex) {
+            return "ADT_OBJECT";
+        }
     }
 
     /**
@@ -128,6 +153,79 @@ public class AbapEditorUtil {
             System.out.println("[CodeBot Debug] insertTextAtCursor: exception " + e.getMessage());
             e.printStackTrace();
             return false;
+        }
+    }
+
+    /**
+     * Navigate the active ABAP/text editor to a 1-based line number.
+     */
+    public static boolean goToLine(int lineNumber) {
+        if (lineNumber < 1) {
+            return false;
+        }
+        try {
+            ITextEditor textEditor = getActiveTextEditor();
+            if (textEditor == null) {
+                System.out.println("[CodeBot Debug] goToLine: no ITextEditor available.");
+                return false;
+            }
+
+            IDocument document =
+                    textEditor.getDocumentProvider().getDocument(textEditor.getEditorInput());
+            if (document == null) {
+                System.out.println("[CodeBot Debug] goToLine: document is null.");
+                return false;
+            }
+
+            int targetLineIndex = lineNumber - 1;
+            if (targetLineIndex >= document.getNumberOfLines()) {
+                targetLineIndex = Math.max(0, document.getNumberOfLines() - 1);
+            }
+
+            int offset = document.getLineOffset(targetLineIndex);
+            int length = document.getLineLength(targetLineIndex);
+            textEditor.selectAndReveal(offset, Math.max(0, length));
+            return true;
+        } catch (BadLocationException e) {
+            System.out.println("[CodeBot Debug] goToLine: invalid line " + lineNumber + " - " + e.getMessage());
+            return false;
+        } catch (Exception e) {
+            System.out.println("[CodeBot Debug] goToLine: exception " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public static IResource getActiveEditorResource() {
+        try {
+            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
+            if (window == null) {
+                return null;
+            }
+            IWorkbenchPage page = window.getActivePage();
+            if (page == null) {
+                return null;
+            }
+            IEditorPart editorPart = page.getActiveEditor();
+            if (editorPart == null) {
+                return null;
+            }
+            IEditorInput input = editorPart.getEditorInput();
+            if (input instanceof IAdaptable) {
+                Object adapted = ((IAdaptable) input).getAdapter(IResource.class);
+                if (adapted instanceof IResource) {
+                    return (IResource) adapted;
+                }
+            }
+            if (editorPart instanceof IAdaptable) {
+                Object adapted = ((IAdaptable) editorPart).getAdapter(IResource.class);
+                if (adapted instanceof IResource) {
+                    return (IResource) adapted;
+                }
+            }
+            return null;
+        } catch (Exception ex) {
+            return null;
         }
     }
 }

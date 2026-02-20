@@ -67,6 +67,7 @@ public class BotResponse {
         private final String ruleId;
         private final String title;
         private final String description;
+        private final String severity;
         private final int line;
         private final String correctCode;
 
@@ -75,6 +76,7 @@ public class BotResponse {
                              String ruleId,
                              String title,
                              String description,
+                             String severity,
                              int line,
                              String correctCode) {
             this.projectName = projectName;
@@ -82,6 +84,7 @@ public class BotResponse {
             this.ruleId = ruleId;
             this.title = title;
             this.description = description;
+            this.severity = severity;
             this.line = line;
             this.correctCode = correctCode;
         }
@@ -91,6 +94,7 @@ public class BotResponse {
         public String getRuleId() { return ruleId; }
         public String getTitle() { return title; }
         public String getDescription() { return description; }
+        public String getSeverity() { return severity; }
         public int getLine() { return line; }
         public String getCorrectCode() { return correctCode; }
     }
