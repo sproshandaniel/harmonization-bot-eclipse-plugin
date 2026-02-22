@@ -47,6 +47,10 @@ public class BotView extends ViewPart {
     private final SimpleRuleBot bot = new SimpleRuleBot();
     private BotResponse lastResponse;
     private List<RuleViolation> currentViolations = java.util.Collections.emptyList();
+    private boolean requestInFlight = false;
+    private long lastSubmitAtMs = 0L;
+    private String lastSubmittedQuestion = "";
+    private static final long DUPLICATE_SUPPRESS_MS = 1500L;
 
     @Override
     public void createPartControl(Composite parent) {
@@ -136,74 +140,103 @@ public class BotView extends ViewPart {
             return;
         }
 
-        appendConversation("You", question);
-        statusLabel.setText("Processing...");
-        lastResponse = bot.reply(question);
-        pasteButton.setEnabled(lastResponse != null && hasPasteableSuggestion(lastResponse));
-        currentViolations = java.util.Collections.emptyList();
-        violationsList.removeAll();
-        violationDetailText.setText("");
-
-        if (lastResponse == null) {
-            appendConversation("CodeBot", "No response from bot.");
-            statusLabel.setText("No response");
+        if (requestInFlight) {
+            statusLabel.setText("Request already in progress...");
             return;
         }
-
-        if (lastResponse.getKind() == BotResponse.Kind.TEMPLATE_SUGGESTION && lastResponse.hasTemplate()) {
-            String msg = lastResponse.getMessage()
-                    + "\n\n--- Suggested Template ---\n"
-                    + lastResponse.getTemplateCode();
-            appendConversation("CodeBot", msg);
-            statusLabel.setText("Template suggestion ready");
+        long now = System.currentTimeMillis();
+        if (question.equalsIgnoreCase(lastSubmittedQuestion)
+                && (now - lastSubmitAtMs) < DUPLICATE_SUPPRESS_MS) {
+            statusLabel.setText("Duplicate request ignored");
             return;
         }
+        requestInFlight = true;
+        lastSubmittedQuestion = question;
+        lastSubmitAtMs = now;
+        setBusy(true);
 
-        if (lastResponse.getKind() == BotResponse.Kind.VALIDATION_RESULT) {
-            if (lastResponse.hasViolations()) {
-                List<RuleViolation> violations = sortViolationsBySeverity(lastResponse.getViolations());
-                currentViolations = violations;
-                StringBuilder sb = new StringBuilder();
-                sb.append(lastResponse.getMessage())
-                        .append("\n\nTotal violations: ").append(violations.size())
-                        .append("\n")
-                        .append("Use the violations panel to review and jump to each line.\n");
+        try {
+            appendConversation("You", question);
+            statusLabel.setText("Processing...");
+            lastResponse = bot.reply(question);
+            pasteButton.setEnabled(lastResponse != null && hasPasteableSuggestion(lastResponse));
+            currentViolations = java.util.Collections.emptyList();
+            violationsList.removeAll();
+            violationDetailText.setText("");
 
-                int previewCount = Math.min(3, violations.size());
-                sb.append("\nTop findings:\n");
-                for (int i = 0; i < previewCount; i++) {
-                    RuleViolation v = violations.get(i);
-                    String sev = normalizeSeverity(v.getSeverity());
-                    sb.append("- ").append(sev).append(" | Line ").append(v.getLine())
-                            .append(" [").append(v.getRuleId()).append("] ")
-                            .append(v.getTitle()).append("\n");
-                    violationsList.add(formatViolationListEntry(v));
-                }
-                for (int i = previewCount; i < violations.size(); i++) {
-                    RuleViolation v = violations.get(i);
-                    violationsList.add(formatViolationListEntry(v));
-                }
-                if (violations.size() > previewCount) {
-                    sb.append("...and ").append(violations.size() - previewCount).append(" more.");
-                }
-                appendConversation("CodeBot", sb.toString());
-                statusLabel.setText("Validation completed with violations");
-                ViolationGovernanceService.updateFromValidation(
-                        AbapEditorUtil.getActiveEditorNameOrDefault(),
-                        violations);
-                showViolationDetails(violations.get(0));
-                violationsList.select(0);
-            } else {
-                appendConversation("CodeBot", lastResponse.getMessage() + "\n\nNo violations detected.");
-                statusLabel.setText("Validation passed");
-                violationDetailText.setText("");
-                ViolationGovernanceService.clear();
+            if (lastResponse == null) {
+                appendConversation("CodeBot", "No response from bot.");
+                statusLabel.setText("No response");
+                return;
             }
-            return;
-        }
 
-        appendConversation("CodeBot", lastResponse.getMessage());
-        statusLabel.setText("Response ready");
+            if (lastResponse.getKind() == BotResponse.Kind.TEMPLATE_SUGGESTION && lastResponse.hasTemplate()) {
+                String msg = lastResponse.getMessage()
+                        + "\n\n--- Suggested Template ---\n"
+                        + lastResponse.getTemplateCode();
+                appendConversation("CodeBot", msg);
+                statusLabel.setText("Template suggestion ready");
+                return;
+            }
+
+            if (lastResponse.getKind() == BotResponse.Kind.VALIDATION_RESULT) {
+                if (lastResponse.hasViolations()) {
+                    List<RuleViolation> violations = sortViolationsBySeverity(lastResponse.getViolations());
+                    currentViolations = violations;
+                    StringBuilder sb = new StringBuilder();
+                    sb.append(lastResponse.getMessage())
+                            .append("\n\nTotal violations: ").append(violations.size())
+                            .append("\n")
+                            .append("Use the violations panel to review and jump to each line.\n");
+
+                    int previewCount = Math.min(3, violations.size());
+                    sb.append("\nTop findings:\n");
+                    for (int i = 0; i < previewCount; i++) {
+                        RuleViolation v = violations.get(i);
+                        String sev = normalizeSeverity(v.getSeverity());
+                        sb.append("- ").append(sev).append(" | Line ").append(v.getLine())
+                                .append(" [").append(v.getRuleId()).append("] ")
+                                .append(v.getTitle()).append("\n");
+                        violationsList.add(formatViolationListEntry(v));
+                    }
+                    for (int i = previewCount; i < violations.size(); i++) {
+                        RuleViolation v = violations.get(i);
+                        violationsList.add(formatViolationListEntry(v));
+                    }
+                    if (violations.size() > previewCount) {
+                        sb.append("...and ").append(violations.size() - previewCount).append(" more.");
+                    }
+                    appendConversation("CodeBot", sb.toString());
+                    statusLabel.setText("Validation completed with violations");
+                    ViolationGovernanceService.updateFromValidation(
+                            AbapEditorUtil.getActiveEditorNameOrDefault(),
+                            violations);
+                    showViolationDetails(violations.get(0));
+                    violationsList.select(0);
+                } else {
+                    appendConversation("CodeBot", lastResponse.getMessage() + "\n\nNo violations detected.");
+                    statusLabel.setText("Validation passed");
+                    violationDetailText.setText("");
+                    ViolationGovernanceService.clear();
+                }
+                return;
+            }
+
+            appendConversation("CodeBot", lastResponse.getMessage());
+            statusLabel.setText("Response ready");
+        } finally {
+            requestInFlight = false;
+            setBusy(false);
+        }
+    }
+
+    private void setBusy(boolean busy) {
+        if (chatButton != null && !chatButton.isDisposed()) {
+            chatButton.setEnabled(!busy);
+        }
+        if (validateButton != null && !validateButton.isDisposed()) {
+            validateButton.setEnabled(!busy);
+        }
     }
 
     private void appendConversation(String role, String content) {
