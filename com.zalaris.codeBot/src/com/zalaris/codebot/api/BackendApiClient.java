@@ -179,6 +179,54 @@ public class BackendApiClient {
         logViolation("generic", objectName, transport, "MAJOR", "fixed");
     }
 
+    public Map<String, Object> generateTechnicalDoc(
+            String code,
+            String objectName,
+            String changeSummary,
+            String validationSummary)
+            throws IOException, InterruptedException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("code", code == null ? "" : code);
+        payload.put("object_name", objectName == null ? "ADT_OBJECT" : objectName);
+        payload.put("project_id", projectId.isEmpty() ? null : projectId);
+        payload.put("developer", user);
+        payload.put("change_summary", changeSummary == null ? "" : changeSummary);
+        payload.put("validation_summary", validationSummary == null ? "" : validationSummary);
+        return postJson("/api/docs/generate", payload);
+    }
+
+    public Map<String, Object> enrichTechnicalDoc(
+            String existingDocument,
+            String code,
+            String objectName,
+            String changeSummary,
+            String validationSummary)
+            throws IOException, InterruptedException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("existing_document", existingDocument == null ? "" : existingDocument);
+        payload.put("code", code == null ? "" : code);
+        payload.put("object_name", objectName == null ? "ADT_OBJECT" : objectName);
+        payload.put("project_id", projectId.isEmpty() ? null : projectId);
+        payload.put("developer", user);
+        payload.put("change_summary", changeSummary == null ? "" : changeSummary);
+        payload.put("validation_summary", validationSummary == null ? "" : validationSummary);
+        return postJson("/api/docs/enrich", payload);
+    }
+
+    public Map<String, Object> saveTechnicalDoc(
+            String title,
+            String document,
+            String objectName)
+            throws IOException, InterruptedException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("title", title == null ? "Technical Design" : title);
+        payload.put("document", document == null ? "" : document);
+        payload.put("object_name", objectName == null ? "ADT_OBJECT" : objectName);
+        payload.put("project_id", projectId.isEmpty() ? null : projectId);
+        payload.put("developer", user);
+        return postJson("/api/docs/save", payload);
+    }
+
     public String resolveRoleFromProjectMembership() throws IOException, InterruptedException {
         Object parsed = getJsonAny("/api/projects");
         List<Object> projects = asList(parsed);
