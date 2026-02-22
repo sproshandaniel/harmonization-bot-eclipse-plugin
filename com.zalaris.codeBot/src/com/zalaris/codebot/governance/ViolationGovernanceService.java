@@ -16,6 +16,7 @@ import org.eclipse.ui.PlatformUI;
 import com.zalaris.codebot.adt.AbapEditorUtil;
 import com.zalaris.codebot.api.BackendApiClient;
 import com.zalaris.codebot.bot.BotResponse.RuleViolation;
+import com.zalaris.codebot.util.UserRoleUtil;
 
 public final class ViolationGovernanceService {
 
@@ -52,6 +53,9 @@ public final class ViolationGovernanceService {
     }
 
     public static void onLikelyActivationCommand(String commandId) {
+        if (UserRoleUtil.isValidationExemptRole()) {
+            return;
+        }
         if (!isLikelyActivationCommand(commandId)) {
             return;
         }
@@ -68,6 +72,7 @@ public final class ViolationGovernanceService {
 
     private static void validateOnActivationAttempt() {
         String objectName = captureActiveObjectName();
+        String transport = captureActiveTransport();
         String code = captureActiveCode();
 
         if (code == null || code.isBlank()) {
@@ -85,7 +90,7 @@ public final class ViolationGovernanceService {
 
         BackendApiClient api = new BackendApiClient();
         try {
-            Map<String, Object> response = api.validate(code, objectName, "ADT", false);
+            Map<String, Object> response = api.validate(code, objectName, transport, false);
             List<RuleViolation> majors = filterMajorOnly(parseViolations(response.get("violations")));
 
             pendingObjectName = objectName;
@@ -94,7 +99,7 @@ public final class ViolationGovernanceService {
             if (majors.isEmpty()) {
                 clearAllCodeBotMarkersInWorkspace();
                 try {
-                    api.markViolationFixed(objectName, "ADT");
+                    api.markViolationFixed(objectName, transport);
                 } catch (IOException | InterruptedException ex) {
                     System.out.println("[CodeBot] Failed to mark violation fixed: " + ex.getMessage());
                 }
@@ -103,13 +108,17 @@ public final class ViolationGovernanceService {
 
             publishMarkers(majors);
             showForgotValidationWarning(majors.size());
-            logMajorsToBackend(api, majors, objectName);
+            logMajorsToBackend(api, majors, objectName, transport);
         } catch (Exception ex) {
             System.out.println("[CodeBot] Activation-attempt validation failed: " + ex.getMessage());
         }
     }
 
-    private static void logMajorsToBackend(BackendApiClient api, List<RuleViolation> majors, String objectName) {
+    private static void logMajorsToBackend(
+            BackendApiClient api,
+            List<RuleViolation> majors,
+            String objectName,
+            String transport) {
         long now = System.currentTimeMillis();
         if (now - lastLoggedAtMillis < 3000) {
             return;
@@ -118,7 +127,7 @@ public final class ViolationGovernanceService {
 
         RuleViolation top = majors.get(0);
         try {
-            api.logViolation(top.getRulePackName(), objectName, "ADT", "MAJOR", "not fixed");
+            api.logViolation(top.getRulePackName(), objectName, transport, "MAJOR", "not fixed");
         } catch (IOException | InterruptedException ex) {
             System.out.println("[CodeBot] Failed to log violation on activation attempt: " + ex.getMessage());
         }
@@ -141,6 +150,16 @@ public final class ViolationGovernanceService {
             return "ADT_OBJECT";
         }
         display.syncExec(() -> value[0] = AbapEditorUtil.getActiveEditorNameOrDefault());
+        return value[0];
+    }
+
+    private static String captureActiveTransport() {
+        final String[] value = new String[] { "ADT" };
+        Display display = Display.getDefault();
+        if (display == null || display.isDisposed()) {
+            return "ADT";
+        }
+        display.syncExec(() -> value[0] = AbapEditorUtil.getActiveTransportOrDefault());
         return value[0];
     }
 

@@ -8,6 +8,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -178,6 +179,106 @@ public class BackendApiClient {
         logViolation("generic", objectName, transport, "MAJOR", "fixed");
     }
 
+    public String resolveRoleFromProjectMembership() throws IOException, InterruptedException {
+        Object parsed = getJsonAny("/api/projects");
+        List<Object> projects = asList(parsed);
+        if (projects.isEmpty() && parsed instanceof Map<?, ?>) {
+            Object nested = ((Map<?, ?>) parsed).get("projects");
+            projects = asList(nested);
+        }
+        if (projects.isEmpty()) {
+            return "";
+        }
+
+        String bestRole = "";
+        String userLower = user == null ? "" : user.trim().toLowerCase(Locale.ROOT);
+        for (Object projectObj : projects) {
+            if (!(projectObj instanceof Map<?, ?>)) {
+                continue;
+            }
+            Map<?, ?> project = (Map<?, ?>) projectObj;
+            String pid = asString(project, "id");
+            if (!projectId.isBlank() && !projectId.equals(pid)) {
+                continue;
+            }
+            List<Object> members = asList(project.get("members"));
+            for (Object memberObj : members) {
+                if (!(memberObj instanceof Map<?, ?>)) {
+                    continue;
+                }
+                Map<?, ?> member = (Map<?, ?>) memberObj;
+                String email = asString(member, "email").toLowerCase(Locale.ROOT);
+                if (email.isEmpty() || !isSameIdentity(userLower, email)) {
+                    continue;
+                }
+                String role = normalizeRole(asString(member, "role"));
+                if (priority(role) > priority(bestRole)) {
+                    bestRole = role;
+                }
+            }
+        }
+        return bestRole;
+    }
+
+    private String asString(Map<?, ?> map, String key) {
+        if (map == null) {
+            return "";
+        }
+        Object value = map.get(key);
+        if (value == null) {
+            return "";
+        }
+        return String.valueOf(value).trim();
+    }
+
+    private boolean isSameIdentity(String runtimeUser, String memberEmail) {
+        String u = runtimeUser == null ? "" : runtimeUser.trim().toLowerCase(Locale.ROOT);
+        String m = memberEmail == null ? "" : memberEmail.trim().toLowerCase(Locale.ROOT);
+        if (u.isEmpty() || m.isEmpty()) {
+            return false;
+        }
+        if (u.equals(m)) {
+            return true;
+        }
+        String mLocal = m.contains("@") ? m.substring(0, m.indexOf('@')) : m;
+        if (u.equals(mLocal)) {
+            return true;
+        }
+        String uLocal = u.contains("@") ? u.substring(0, u.indexOf('@')) : u;
+        return uLocal.equals(mLocal);
+    }
+
+    private int priority(String role) {
+        if ("architect".equals(role)) {
+            return 3;
+        }
+        if ("senior_developer".equals(role)) {
+            return 2;
+        }
+        if ("developer".equals(role)) {
+            return 1;
+        }
+        return 0;
+    }
+
+    private String normalizeRole(String role) {
+        if (role == null) {
+            return "";
+        }
+        String normalized = role.trim().toLowerCase(Locale.ROOT);
+        if (normalized.equals("senior developer")) {
+            return "senior_developer";
+        }
+        return normalized;
+    }
+
+    private List<Object> asList(Object value) {
+        if (value instanceof List<?>) {
+            return new ArrayList<>((List<?>) value);
+        }
+        return java.util.Collections.emptyList();
+    }
+
     private Map<String, Object> postJson(String path, Map<String, Object> payload)
             throws IOException, InterruptedException {
         String body = JsonUtil.stringify(payload);
@@ -195,5 +296,21 @@ public class BackendApiClient {
                     "Backend API error " + response.statusCode() + " from " + baseUrl + path + ": " + response.body());
         }
         return JsonUtil.parseObject(response.body());
+    }
+
+    private Object getJsonAny(String path) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + path))
+                .timeout(Duration.ofSeconds(20))
+                .header("Content-Type", "application/json")
+                .header("x-hb-user", user)
+                .GET()
+                .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IOException(
+                    "Backend API error " + response.statusCode() + " from " + baseUrl + path + ": " + response.body());
+        }
+        return JsonUtil.parse(response.body());
     }
 }

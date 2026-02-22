@@ -5,10 +5,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import org.eclipse.jface.dialogs.MessageDialog;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Shell;
-
 import com.zalaris.codebot.adt.AbapEditorUtil;
 import com.zalaris.codebot.api.BackendApiClient;
 import com.zalaris.codebot.bot.BotResponse.Kind;
@@ -17,6 +13,21 @@ import com.zalaris.codebot.bot.BotResponse.RuleViolation;
 public class SimpleRuleBot {
 
     private final BackendApiClient apiClient = new BackendApiClient();
+    private PendingLlmFallback pendingLlmFallback;
+
+    private static final class PendingLlmFallback {
+        final String query;
+        final String code;
+        final String objectName;
+        final boolean logViolations;
+
+        PendingLlmFallback(String query, String code, String objectName, boolean logViolations) {
+            this.query = query;
+            this.code = code;
+            this.objectName = objectName;
+            this.logViolations = logViolations;
+        }
+    }
 
     public BotResponse reply(String question) {
         String query = (question == null) ? "" : question.trim();
@@ -24,6 +35,35 @@ public class SimpleRuleBot {
             return new BotResponse(
                     Kind.INFO,
                     "Ask for validation, template, or wizard guidance. Example: 'validate current object' or 'template for singleton class'.");
+        }
+
+        if (pendingLlmFallback != null) {
+            if (isAffirmative(query)) {
+                PendingLlmFallback pending = pendingLlmFallback;
+                pendingLlmFallback = null;
+                try {
+                    Map<String, Object> confirmed = apiClient.assist(
+                            pending.query,
+                            pending.code,
+                            pending.objectName,
+                            "ADT",
+                            pending.logViolations,
+                            true);
+                    return toBotResponse(confirmed);
+                } catch (Exception ex) {
+                    return new BotResponse(
+                            Kind.INFO,
+                            "LLM fallback request failed. " + ex.getMessage());
+                }
+            }
+            if (isNegative(query)) {
+                pendingLlmFallback = null;
+                return new BotResponse(
+                        Kind.INFO,
+                        "Understood. I will continue with rule-based results only.");
+            }
+            // Treat any non yes/no answer as a new question and clear stale pending state.
+            pendingLlmFallback = null;
         }
 
         String activeCode = AbapEditorUtil.getActiveEditorContentOrEmpty();
@@ -38,20 +78,11 @@ public class SimpleRuleBot {
                     "ADT",
                     shouldLogViolations);
             if (requiresLlmFallbackConfirmation(response)) {
-                boolean proceed = askForLlmFallbackConsent();
-                if (proceed) {
-                    response = apiClient.assist(
-                            query,
-                            activeCode,
-                            objectName,
-                            "ADT",
-                            shouldLogViolations,
-                            true);
-                } else {
-                    return new BotResponse(
-                            Kind.INFO,
-                            "LLM fallback was not used. I can continue with rule-based guidance only.");
-                }
+                pendingLlmFallback = new PendingLlmFallback(query, activeCode, objectName, shouldLogViolations);
+                String prompt = asString(response.get("message"),
+                        "No satisfactory rule-based result found. Use LLM fallback?")
+                        + "\n\nReply with 'yes' to use LLM fallback or 'no' to skip.";
+                return new BotResponse(Kind.INFO, prompt);
             }
             return toBotResponse(response);
         } catch (Exception ex) {
@@ -84,8 +115,10 @@ public class SimpleRuleBot {
         String message = asString(response.get("message"), "No response from backend.");
         Map<String, Object> llmFallback = asMap(response.get("llm_fallback"));
         String llmAnswer = asString(llmFallback.get("answer"), "");
+        String llmSuggestedCode = "";
         if (!llmAnswer.isEmpty()) {
             message = message + "\n\n--- LLM Guidance ---\n" + llmAnswer;
+            llmSuggestedCode = firstCodeBlock(llmAnswer);
         }
         List<RuleViolation> violations = parseViolations(response.get("violations"));
         Map<String, Object> suggestions = asMap(response.get("suggestions"));
@@ -98,12 +131,15 @@ public class SimpleRuleBot {
         String pasteCandidate = (violationFixCode != null && !violationFixCode.isEmpty())
                 ? violationFixCode
                 : templateCode;
+        if ((pasteCandidate == null || pasteCandidate.isEmpty()) && !llmSuggestedCode.isEmpty()) {
+            pasteCandidate = llmSuggestedCode;
+        }
 
         if (!violations.isEmpty()) {
             return new BotResponse(Kind.VALIDATION_RESULT, message, pasteCandidate, violations);
         }
-        if (templateCode != null && !templateCode.isEmpty()) {
-            return new BotResponse(Kind.TEMPLATE_SUGGESTION, message, templateCode, Collections.emptyList());
+        if (pasteCandidate != null && !pasteCandidate.isEmpty()) {
+            return new BotResponse(Kind.TEMPLATE_SUGGESTION, message, pasteCandidate, Collections.emptyList());
         }
         return new BotResponse(Kind.INFO, message, null, Collections.emptyList());
     }
@@ -116,16 +152,28 @@ public class SimpleRuleBot {
         return asBoolean(llmFallback.get("enabled")) && asBoolean(llmFallback.get("requires_confirmation"));
     }
 
-    private boolean askForLlmFallbackConsent() {
-        Display display = Display.getDefault();
-        if (display == null) {
-            return false;
+    private String firstCodeBlock(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
         }
-        Shell shell = display.getActiveShell();
-        return MessageDialog.openQuestion(
-                shell,
-                "CodeBot LLM Fallback",
-                "No satisfactory rule-based result was found.\n\nUse LLM fallback guidance?");
+        String normalized = text.replace("\r\n", "\n");
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("```(?:abap|ABAP|[a-zA-Z0-9_-]+)?\\s*\\n([\\s\\S]*?)```")
+                .matcher(normalized);
+        if (matcher.find()) {
+            return matcher.group(1).trim();
+        }
+        return "";
+    }
+
+    private boolean isAffirmative(String text) {
+        String q = (text == null) ? "" : text.trim().toLowerCase();
+        return q.equals("yes") || q.equals("y") || q.equals("ok") || q.equals("sure") || q.equals("proceed");
+    }
+
+    private boolean isNegative(String text) {
+        String q = (text == null) ? "" : text.trim().toLowerCase();
+        return q.equals("no") || q.equals("n") || q.equals("skip") || q.equals("cancel");
     }
 
     private String firstSnippet(Map<String, Object> suggestions, String key) {

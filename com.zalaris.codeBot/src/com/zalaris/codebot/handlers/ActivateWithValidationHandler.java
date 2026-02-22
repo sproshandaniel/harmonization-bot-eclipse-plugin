@@ -15,6 +15,7 @@ import com.zalaris.codebot.bot.BotResponse;
 import com.zalaris.codebot.bot.BotResponse.RuleViolation;
 import com.zalaris.codebot.bot.SimpleRuleBot;
 import com.zalaris.codebot.governance.ViolationGovernanceService;
+import com.zalaris.codebot.util.UserRoleUtil;
 
 /**
  * Command handler that performs validation before allowing activation.
@@ -27,6 +28,11 @@ public class ActivateWithValidationHandler extends AbstractHandler {
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException {
         Shell shell = HandlerUtil.getActiveShell(event);
+        if (UserRoleUtil.isValidationExemptRole()) {
+            performRealActivation();
+            MessageDialog.openInformation(shell, "Activation", "Activation completed successfully.");
+            return null;
+        }
 
         BotResponse response = bot.validateCurrentEditor();
         List<RuleViolation> violations = response.getViolations();

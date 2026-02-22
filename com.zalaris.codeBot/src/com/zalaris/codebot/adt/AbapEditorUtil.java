@@ -1,5 +1,8 @@
 package com.zalaris.codebot.adt;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IAdaptable;
 import org.eclipse.jface.text.BadLocationException;
@@ -15,6 +18,7 @@ import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.texteditor.ITextEditor;
 
 public class AbapEditorUtil {
+    private static final Pattern TRANSPORT_PATTERN = Pattern.compile("\\b([A-Z][0-9]{6,})\\b");
 
     /**
      * Try to adapt the active editor to an ITextEditor (works for ADT editors like ProgramEditor).
@@ -78,6 +82,45 @@ public class AbapEditorUtil {
         } catch (Exception ex) {
             return "ADT_OBJECT";
         }
+    }
+
+    public static String getActiveTransportOrDefault() {
+        String configured = System.getProperty("codebot.transport", "").trim();
+        if (!configured.isEmpty()) {
+            return configured;
+        }
+        String env = System.getenv("CODEBOT_TRANSPORT");
+        if (env != null && !env.trim().isEmpty()) {
+            return env.trim();
+        }
+        try {
+            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
+            if (window != null && window.getActivePage() != null && window.getActivePage().getActiveEditor() != null) {
+                String title = window.getActivePage().getActiveEditor().getTitle();
+                String fromTitle = extractTransport(title);
+                if (!fromTitle.isEmpty()) {
+                    return fromTitle;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        String content = getActiveEditorContentOrEmpty();
+        String fromContent = extractTransport(content);
+        if (!fromContent.isEmpty()) {
+            return fromContent;
+        }
+        return "ADT";
+    }
+
+    private static String extractTransport(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        Matcher matcher = TRANSPORT_PATTERN.matcher(text.toUpperCase());
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return "";
     }
 
     /**
