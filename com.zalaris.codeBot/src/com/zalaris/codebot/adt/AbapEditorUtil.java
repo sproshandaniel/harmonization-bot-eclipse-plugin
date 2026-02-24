@@ -19,6 +19,10 @@ import org.eclipse.ui.texteditor.ITextEditor;
 
 public class AbapEditorUtil {
     private static final Pattern TRANSPORT_PATTERN = Pattern.compile("\\b([A-Z][0-9]{6,})\\b");
+    private static volatile String lastSnapshotObjectName = "";
+    private static volatile String lastSnapshotCode = "";
+    private static volatile String lastSnapshotTransport = "";
+    private static volatile long lastSnapshotAtMillis = 0L;
 
     /**
      * Try to adapt the active editor to an ITextEditor (works for ADT editors like ProgramEditor).
@@ -49,10 +53,14 @@ public class AbapEditorUtil {
         }
 
         if (editorPart instanceof IAdaptable) {
-            ITextEditor adapted = ((IAdaptable) editorPart).getAdapter(ITextEditor.class);
-            if (adapted != null) {
-                System.out.println("[CodeBot Debug] getActiveTextEditor: obtained ITextEditor via adapter.");
-                return adapted;
+            try {
+                ITextEditor adapted = ((IAdaptable) editorPart).getAdapter(ITextEditor.class);
+                if (adapted != null) {
+                    System.out.println("[CodeBot Debug] getActiveTextEditor: obtained ITextEditor via adapter.");
+                    return adapted;
+                }
+            } catch (Exception ex) {
+                System.out.println("[CodeBot Debug] getActiveTextEditor: adapter lookup failed: " + ex.getMessage());
             }
         }
 
@@ -110,6 +118,45 @@ public class AbapEditorUtil {
             return fromContent;
         }
         return "ADT";
+    }
+
+    public static void captureActiveEditorSnapshot(String reason) {
+        try {
+            String objectName = getActiveEditorNameOrDefault();
+            String code = getActiveEditorContentOrEmpty();
+            String transport = getActiveTransportOrDefault();
+            if (code == null || code.isBlank()) {
+                return;
+            }
+            lastSnapshotObjectName = objectName == null ? "ADT_OBJECT" : objectName;
+            lastSnapshotCode = code;
+            lastSnapshotTransport = transport == null ? "ADT" : transport;
+            lastSnapshotAtMillis = System.currentTimeMillis();
+            System.out.println("[CodeBot] Captured editor snapshot"
+                    + (reason == null || reason.isBlank() ? "" : " (" + reason + ")")
+                    + " object=" + lastSnapshotObjectName
+                    + " codeLength=" + lastSnapshotCode.length());
+        } catch (Exception ex) {
+            System.out.println("[CodeBot] Failed to capture editor snapshot: " + ex.getMessage());
+        }
+    }
+
+    public static String getLastSnapshotCodeOrEmpty() {
+        return lastSnapshotCode == null ? "" : lastSnapshotCode;
+    }
+
+    public static String getLastSnapshotObjectNameOrDefault() {
+        String value = lastSnapshotObjectName == null ? "" : lastSnapshotObjectName.trim();
+        return value.isEmpty() ? "ADT_OBJECT" : value;
+    }
+
+    public static String getLastSnapshotTransportOrDefault() {
+        String value = lastSnapshotTransport == null ? "" : lastSnapshotTransport.trim();
+        return value.isEmpty() ? "ADT" : value;
+    }
+
+    public static long getLastSnapshotAtMillis() {
+        return lastSnapshotAtMillis;
     }
 
     private static String extractTransport(String text) {

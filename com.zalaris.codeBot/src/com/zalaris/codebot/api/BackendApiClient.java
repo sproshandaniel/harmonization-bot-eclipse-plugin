@@ -1,9 +1,11 @@
 package com.zalaris.codebot.api;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.net.Proxy;
 import java.net.ProxySelector;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -17,6 +19,8 @@ import java.util.Map;
 import com.zalaris.codebot.util.JsonUtil;
 
 public class BackendApiClient {
+    private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(20);
+    private static final Duration DOC_REQUEST_TIMEOUT = Duration.ofSeconds(90);
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(8))
@@ -192,7 +196,7 @@ public class BackendApiClient {
         payload.put("developer", user);
         payload.put("change_summary", changeSummary == null ? "" : changeSummary);
         payload.put("validation_summary", validationSummary == null ? "" : validationSummary);
-        return postJson("/api/docs/generate", payload);
+        return postJson("/api/docs/generate", payload, DOC_REQUEST_TIMEOUT);
     }
 
     public Map<String, Object> enrichTechnicalDoc(
@@ -210,7 +214,102 @@ public class BackendApiClient {
         payload.put("developer", user);
         payload.put("change_summary", changeSummary == null ? "" : changeSummary);
         payload.put("validation_summary", validationSummary == null ? "" : validationSummary);
-        return postJson("/api/docs/enrich", payload);
+        return postJson("/api/docs/enrich", payload, DOC_REQUEST_TIMEOUT);
+    }
+
+
+    public Map<String, Object> getLatestTechnicalDoc(String objectName)
+            throws IOException, InterruptedException {
+        StringBuilder path = new StringBuilder("/api/docs/latest");
+        List<String> queryParts = new ArrayList<>();
+        String normalizedObject = (objectName == null || objectName.isBlank()) ? "ADT_OBJECT" : objectName;
+        queryParts.add("object_name=" + urlEncode(normalizedObject));
+        if (!projectId.isBlank()) {
+            queryParts.add("project_id=" + urlEncode(projectId));
+        }
+        if (!user.isBlank()) {
+            queryParts.add("developer=" + urlEncode(user));
+        }
+        if (!queryParts.isEmpty()) {
+            path.append("?").append(String.join("&", queryParts));
+        }
+        return getJsonObject(path.toString());
+    }
+
+    public List<String> getViolationEnforcedRoles() throws IOException, InterruptedException {
+        return getRoleListSetting("violation_enforced_roles", List.of("developer", "senior_developer"));
+    }
+
+    public List<String> getMandatoryDocumentationRoles() throws IOException, InterruptedException {
+        return getRoleListSetting("mandatory_documentation_roles", List.of());
+    }
+
+    public boolean hasReleasedWithoutDocumentationViolation(String objectName)
+            throws IOException, InterruptedException {
+        String normalizedObject = (objectName == null || objectName.isBlank()) ? "ADT_OBJECT" : objectName;
+        String path = "/api/dashboard/violations/exists?object_name="
+                + urlEncode(normalizedObject)
+                + "&statuses="
+                + urlEncode("Released without documentation");
+        Map<String, Object> response = getJsonObject(path);
+        Object raw = response.get("exists");
+        if (raw instanceof Boolean) {
+            return ((Boolean) raw).booleanValue();
+        }
+        if (raw instanceof Number) {
+            return ((Number) raw).intValue() != 0;
+        }
+        if (raw != null) {
+            String text = String.valueOf(raw).trim().toLowerCase(Locale.ROOT);
+            return text.equals("true") || text.equals("1") || text.equals("yes");
+        }
+        return false;
+    }
+
+    public boolean hasAnyTechnicalDocumentForObject(String objectName)
+            throws IOException, InterruptedException {
+        try {
+            Map<String, Object> latest = getLatestTechnicalDoc(objectName);
+            Object rawDoc = latest.get("document");
+            String doc = rawDoc == null ? "" : String.valueOf(rawDoc).trim();
+            return !doc.isEmpty();
+        } catch (IOException ex) {
+            String msg = ex.getMessage() == null ? "" : ex.getMessage();
+            if (msg.contains("404")) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> getRoleListSetting(String key, List<String> defaults) throws IOException, InterruptedException {
+        Object parsed = getJsonAny("/api/settings");
+        if (!(parsed instanceof Map<?, ?> root)) {
+            return new ArrayList<>(defaults);
+        }
+        Object governanceObj = ((Map<String, Object>) root).get("governance_controls");
+        if (!(governanceObj instanceof Map<?, ?> governance)) {
+            return new ArrayList<>(defaults);
+        }
+        Object rawRoles = governance.get(key);
+        if (!(rawRoles instanceof List<?> rawList)) {
+            return new ArrayList<>(defaults);
+        }
+        List<String> out = new ArrayList<>();
+        for (Object item : rawList) {
+            if (item == null) {
+                continue;
+            }
+            String role = String.valueOf(item).trim().toLowerCase(Locale.ROOT);
+            if (!role.isEmpty()) {
+                out.add(role);
+            }
+        }
+        if (out.isEmpty()) {
+            return new ArrayList<>(defaults);
+        }
+        return out;
     }
 
     public Map<String, Object> saveTechnicalDoc(
@@ -329,10 +428,15 @@ public class BackendApiClient {
 
     private Map<String, Object> postJson(String path, Map<String, Object> payload)
             throws IOException, InterruptedException {
+        return postJson(path, payload, DEFAULT_REQUEST_TIMEOUT);
+    }
+
+    private Map<String, Object> postJson(String path, Map<String, Object> payload, Duration timeout)
+            throws IOException, InterruptedException {
         String body = JsonUtil.stringify(payload);
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))
-                .timeout(Duration.ofSeconds(20))
+                .timeout(timeout == null ? DEFAULT_REQUEST_TIMEOUT : timeout)
                 .header("Content-Type", "application/json")
                 .header("x-hb-user", user)
                 .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -346,6 +450,24 @@ public class BackendApiClient {
         return JsonUtil.parseObject(response.body());
     }
 
+
+    private String urlEncode(String value) {
+        return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
+    }
+
+    private Map<String, Object> getJsonObject(String path) throws IOException, InterruptedException {
+        Object parsed = getJsonAny(path);
+        if (parsed instanceof Map<?, ?> map) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() != null) {
+                    out.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+            return out;
+        }
+        throw new IOException("Backend returned non-object response from " + baseUrl + path);
+    }
     private Object getJsonAny(String path) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))

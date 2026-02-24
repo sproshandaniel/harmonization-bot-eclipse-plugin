@@ -51,6 +51,14 @@ public class BotView extends ViewPart {
     private long lastSubmitAtMs = 0L;
     private String lastSubmittedQuestion = "";
     private static final long DUPLICATE_SUPPRESS_MS = 1500L;
+    private static final long VALIDATION_SUPPRESS_MS = 30000L;
+    private String lastValidationFingerprint = "";
+    private long lastValidationAtMs = 0L;
+    private static final long BUTTON_CLICK_GUARD_MS = 600L;
+    private long lastChatClickAtMs = 0L;
+    private long lastValidateClickAtMs = 0L;
+    private long lastClearClickAtMs = 0L;
+    private long lastPasteClickAtMs = 0L;
 
     @Override
     public void createPartControl(Composite parent) {
@@ -121,12 +129,69 @@ public class BotView extends ViewPart {
     }
 
     private void hookListeners() {
-        chatButton.addListener(SWT.Selection, e -> handleChat(false));
-        validateButton.addListener(SWT.Selection, e -> handleChat(true));
-        clearButton.addListener(SWT.Selection, e -> clearConversation());
-        pasteButton.addListener(SWT.Selection, e -> handlePaste());
+        chatButton.addListener(SWT.Selection, e -> {
+            if (!allowRapidClick("chat")) {
+                return;
+            }
+            handleChat(false);
+        });
+        validateButton.addListener(SWT.Selection, e -> {
+            if (!allowRapidClick("validate")) {
+                return;
+            }
+            handleChat(true);
+        });
+        clearButton.addListener(SWT.Selection, e -> {
+            if (!allowRapidClick("clear")) {
+                return;
+            }
+            clearConversation();
+        });
+        pasteButton.addListener(SWT.Selection, e -> {
+            if (!allowRapidClick("paste")) {
+                return;
+            }
+            handlePaste();
+        });
         violationsList.addListener(SWT.Selection, e -> handleViolationClick());
         violationsList.addListener(SWT.DefaultSelection, e -> handleViolationClick());
+    }
+
+    private boolean allowRapidClick(String action) {
+        long now = System.currentTimeMillis();
+        if ("chat".equals(action)) {
+            if ((now - lastChatClickAtMs) < BUTTON_CLICK_GUARD_MS) {
+                statusLabel.setText("Please wait...");
+                return false;
+            }
+            lastChatClickAtMs = now;
+            return true;
+        }
+        if ("validate".equals(action)) {
+            if ((now - lastValidateClickAtMs) < BUTTON_CLICK_GUARD_MS) {
+                statusLabel.setText("Please wait...");
+                return false;
+            }
+            lastValidateClickAtMs = now;
+            return true;
+        }
+        if ("clear".equals(action)) {
+            if ((now - lastClearClickAtMs) < BUTTON_CLICK_GUARD_MS) {
+                statusLabel.setText("Please wait...");
+                return false;
+            }
+            lastClearClickAtMs = now;
+            return true;
+        }
+        if ("paste".equals(action)) {
+            if ((now - lastPasteClickAtMs) < BUTTON_CLICK_GUARD_MS) {
+                statusLabel.setText("Please wait...");
+                return false;
+            }
+            lastPasteClickAtMs = now;
+            return true;
+        }
+        return true;
     }
 
     private void handleChat(boolean forceValidate) {
@@ -150,6 +215,18 @@ public class BotView extends ViewPart {
             statusLabel.setText("Duplicate request ignored");
             return;
         }
+
+        if (isValidationRequest(question)) {
+            String objectName = AbapEditorUtil.getActiveEditorNameOrDefault();
+            String code = AbapEditorUtil.getActiveEditorContentOrEmpty();
+            String fingerprint = objectName + "|" + Integer.toHexString((code == null ? "" : code).hashCode());
+            if (fingerprint.equals(lastValidationFingerprint)
+                    && (now - lastValidationAtMs) < VALIDATION_SUPPRESS_MS) {
+                statusLabel.setText("Validation already ran for current code");
+                return;
+            }
+        }
+
         requestInFlight = true;
         lastSubmittedQuestion = question;
         lastSubmitAtMs = now;
@@ -180,6 +257,11 @@ public class BotView extends ViewPart {
             }
 
             if (lastResponse.getKind() == BotResponse.Kind.VALIDATION_RESULT) {
+                String objectName = AbapEditorUtil.getActiveEditorNameOrDefault();
+                String code = AbapEditorUtil.getActiveEditorContentOrEmpty();
+                lastValidationFingerprint = objectName + "|" + Integer.toHexString((code == null ? "" : code).hashCode());
+                lastValidationAtMs = System.currentTimeMillis();
+
                 if (lastResponse.hasViolations()) {
                     List<RuleViolation> violations = sortViolationsBySeverity(lastResponse.getViolations());
                     currentViolations = violations;
@@ -237,6 +319,14 @@ public class BotView extends ViewPart {
         if (validateButton != null && !validateButton.isDisposed()) {
             validateButton.setEnabled(!busy);
         }
+    }
+
+    private boolean isValidationRequest(String question) {
+        String q = (question == null) ? "" : question.trim().toLowerCase(Locale.ROOT);
+        return q.equals("validate current object")
+                || q.contains("validate")
+                || q.contains("violation")
+                || q.contains("check code");
     }
 
     private void appendConversation(String role, String content) {
