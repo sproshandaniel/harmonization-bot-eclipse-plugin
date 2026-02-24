@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.SWT;
@@ -17,6 +18,7 @@ import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.part.ViewPart;
 
 import com.zalaris.codebot.adt.AbapEditorUtil;
+import com.zalaris.codebot.api.BackendApiClient;
 import com.zalaris.codebot.bot.BotResponse;
 import com.zalaris.codebot.bot.BotResponse.RuleViolation;
 import com.zalaris.codebot.bot.SimpleRuleBot;
@@ -41,10 +43,12 @@ public class BotView extends ViewPart {
     private Label statusLabel;
     private Button chatButton;
     private Button validateButton;
+    private Button explainButton;
     private Button clearButton;
     private Button pasteButton;
 
     private final SimpleRuleBot bot = new SimpleRuleBot();
+    private final BackendApiClient apiClient = new BackendApiClient();
     private BotResponse lastResponse;
     private List<RuleViolation> currentViolations = java.util.Collections.emptyList();
     private boolean requestInFlight = false;
@@ -57,6 +61,7 @@ public class BotView extends ViewPart {
     private static final long BUTTON_CLICK_GUARD_MS = 600L;
     private long lastChatClickAtMs = 0L;
     private long lastValidateClickAtMs = 0L;
+    private long lastExplainClickAtMs = 0L;
     private long lastClearClickAtMs = 0L;
     private long lastPasteClickAtMs = 0L;
 
@@ -77,7 +82,7 @@ public class BotView extends ViewPart {
 
         Composite actions = new Composite(parent, SWT.NONE);
         actions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout actionLayout = new GridLayout(5, false);
+        GridLayout actionLayout = new GridLayout(6, false);
         actionLayout.marginWidth = 0;
         actionLayout.marginHeight = 0;
         actions.setLayout(actionLayout);
@@ -87,6 +92,9 @@ public class BotView extends ViewPart {
 
         validateButton = new Button(actions, SWT.PUSH);
         validateButton.setText("Validate");
+
+        explainButton = new Button(actions, SWT.PUSH);
+        explainButton.setText("Explain");
 
         clearButton = new Button(actions, SWT.PUSH);
         clearButton.setText("Clear");
@@ -141,6 +149,12 @@ public class BotView extends ViewPart {
             }
             handleChat(true);
         });
+        explainButton.addListener(SWT.Selection, e -> {
+            if (!allowRapidClick("explain")) {
+                return;
+            }
+            handleExplain();
+        });
         clearButton.addListener(SWT.Selection, e -> {
             if (!allowRapidClick("clear")) {
                 return;
@@ -183,6 +197,14 @@ public class BotView extends ViewPart {
             lastClearClickAtMs = now;
             return true;
         }
+        if ("explain".equals(action)) {
+            if ((now - lastExplainClickAtMs) < BUTTON_CLICK_GUARD_MS) {
+                statusLabel.setText("Please wait...");
+                return false;
+            }
+            lastExplainClickAtMs = now;
+            return true;
+        }
         if ("paste".equals(action)) {
             if ((now - lastPasteClickAtMs) < BUTTON_CLICK_GUARD_MS) {
                 statusLabel.setText("Please wait...");
@@ -192,6 +214,45 @@ public class BotView extends ViewPart {
             return true;
         }
         return true;
+    }
+
+    private void handleExplain() {
+        if (requestInFlight) {
+            statusLabel.setText("Request already in progress...");
+            return;
+        }
+
+        String activeCode = AbapEditorUtil.getActiveEditorContentOrEmpty();
+        if (activeCode == null || activeCode.trim().isEmpty()) {
+            MessageDialog.openInformation(getSite().getShell(), "CodeBot", "Open an ABAP editor with code first.");
+            return;
+        }
+
+        String objectName = AbapEditorUtil.getActiveEditorNameOrDefault();
+        requestInFlight = true;
+        setBusy(true);
+
+        try {
+            statusLabel.setText("Generating explanation...");
+            appendConversation("You", "Explain current ABAP code");
+            Map<String, Object> response = apiClient.explain(activeCode, objectName, "ADT");
+            String message = asString(response.get("message"), "Explain request completed.");
+            String explanation = asString(response.get("explanation"), "");
+            if (explanation.isEmpty()) {
+                explanation = message;
+            }
+            appendConversation("CodeBot", message);
+            CodeExplanationDialog dialog = new CodeExplanationDialog(getSite().getShell(), objectName, explanation);
+            dialog.open();
+            statusLabel.setText("Explanation ready");
+        } catch (Exception ex) {
+            String detail = ex.getMessage() == null ? String.valueOf(ex) : ex.getMessage();
+            MessageDialog.openError(getSite().getShell(), "CodeBot", "Failed to explain code.\nDetails: " + detail);
+            statusLabel.setText("Explain failed");
+        } finally {
+            requestInFlight = false;
+            setBusy(false);
+        }
     }
 
     private void handleChat(boolean forceValidate) {
@@ -318,6 +379,9 @@ public class BotView extends ViewPart {
         }
         if (validateButton != null && !validateButton.isDisposed()) {
             validateButton.setEnabled(!busy);
+        }
+        if (explainButton != null && !explainButton.isDisposed()) {
+            explainButton.setEnabled(!busy);
         }
     }
 
@@ -486,6 +550,14 @@ public class BotView extends ViewPart {
             }
         }
         return "";
+    }
+
+    private String asString(Object value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? fallback : text;
     }
 
     @Override

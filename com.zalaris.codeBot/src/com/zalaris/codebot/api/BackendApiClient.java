@@ -161,6 +161,17 @@ public class BackendApiClient {
         return postJson("/api/bot/validate", payload);
     }
 
+    public Map<String, Object> explain(String code, String objectName, String transport)
+            throws IOException, InterruptedException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("code", code == null ? "" : code);
+        payload.put("object_name", objectName == null ? "ADT_OBJECT" : objectName);
+        payload.put("project_id", projectId.isEmpty() ? null : projectId);
+        payload.put("developer", user);
+        payload.put("transport", transport == null ? "ADT" : transport);
+        return postJson("/api/bot/explain", payload);
+    }
+
     public void logViolation(String rulePack, String objectName, String transport, String severity)
             throws IOException, InterruptedException {
         logViolation(rulePack, objectName, transport, severity, "not fixed");
